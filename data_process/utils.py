@@ -2,9 +2,7 @@ import os
 import subprocess
 import csv
 import argparse
-from collections import defaultdict
 import json
-from tqdm import tqdm
 from intervaltree import IntervalTree
 from dcase_util.containers import MetaDataContainer, MetaDataItem
 
@@ -162,24 +160,19 @@ def _feed_agreement_to_dict(d, agreement_d, tsv_dir):
             found_its = agreement_d[fname].overlap(it[0], it[1])
             if len(found_its) != len(subdirs):
                 raise ValueError("Missing annotation")
-            classes = defaultdict(int)
+            classes = []
             for it_ in found_its:
                 class_ = it_[2].split('__')[0]
-                classes[class_] += 1
-                # if class_ not in classes:
-                #     classes.append(class_)
+                if class_ not in classes:
+                    classes.append(class_)
             if len(classes) == 1:
                 full_agreement += it[1] - it[0]
-                d['agreement'][fname]['segs']['full'].append([it[0], it[1], list(classes.keys())[0]])
+                d['agreement'][fname]['segs']['full'].append([it[0], it[1]])
                 partial_agreement += it[1] - it[0]
-                d['agreement'][fname]['segs']['partial'].append([it[0], it[1], list(classes.keys())[0]])
+                d['agreement'][fname]['segs']['partial'].append([it[0], it[1]])
             elif len(classes) == 2:
                 partial_agreement += it[1] - it[0]
-                cls1, cls2 = list(classes.keys())
-                if classes[cls1] > classes[cls2]:
-                    d['agreement'][fname]['segs']['partial'].append([it[0], it[1], cls1])
-                else:
-                    d['agreement'][fname]['segs']['partial'].append([it[0], it[1], cls2])
+                d['agreement'][fname]['segs']['partial'].append([it[0], it[1]])
         d['agreement'][fname]['vals']['full'] = full_agreement / duration
         d['agreement'][fname]['vals']['partial'] = partial_agreement / duration
 
@@ -194,13 +187,10 @@ def _merge_agreement_segments(d, agreement_d):
             last_fa_start = fa_segs[0][0]
             for s in fa_segs[1:]:
                 if s[0] != last_fa_seg[1]:
-                    merged_fa_segs.append([last_fa_start, last_fa_seg[1], last_fa_seg[2]])
-                    last_fa_start = s[0]
-                elif last_fa_seg[2] != s[2]:
-                    merged_fa_segs.append([last_fa_start, last_fa_seg[1], last_fa_seg[2]])
+                    merged_fa_segs.append([last_fa_start, last_fa_seg[1]])
                     last_fa_start = s[0]
                 last_fa_seg = s
-            merged_fa_segs.append([last_fa_start, last_fa_seg[1], last_fa_seg[2]])
+            merged_fa_segs.append([last_fa_start, last_fa_seg[1]])
             d['agreement'][fname]['segs']['full'] = sorted(merged_fa_segs)
         if pa_segs != []:
             merged_pa_segs = []
@@ -208,13 +198,10 @@ def _merge_agreement_segments(d, agreement_d):
             last_pa_start = pa_segs[0][0]
             for s in pa_segs[1:]:
                 if s[0] != last_pa_seg[1]:
-                    merged_pa_segs.append([last_pa_start, last_pa_seg[1], last_fa_seg[2]])
+                    merged_pa_segs.append([last_pa_start, last_pa_seg[1]])
                     last_pa_start = s[0]
-                elif last_fa_seg[2] != s[2]:
-                    merged_fa_segs.append([last_fa_start, last_fa_seg[1], last_fa_seg[2]])
-                    last_fa_start = s[0]
                 last_pa_seg = s
-            merged_pa_segs.append([last_pa_start, last_pa_seg[1], last_fa_seg[2]])
+            merged_pa_segs.append([last_pa_start, last_pa_seg[1]])
             d['agreement'][fname]['segs']['partial'] = sorted(merged_pa_segs)
 
 def _convert_annotations_to_json(tsv_dir, json_path):
@@ -269,17 +256,16 @@ def generate_annotations(bat_csv_dir, output_dir):
 def cut_audio_with_agreement(agr_level, json_path, audio_dir, output_dir):
     with open(json_path, 'r') as f:
         data = json.load(f)
-    for fname in tqdm(data['agreement'].keys()):
+    for fname in data['agreement'].keys():
         segs = data['agreement'][fname]['segs'][agr_level]
         fpath = os.path.join(audio_dir, fname + '.wav')
         for s in segs:
-            output_fname = '_'.join([fname, str(s[0]), str(s[1]), s[2]]) + '.wav'
+            output_fname = '__'.join([fname, str(s[0]), str(s[1])]) + '.wav'
             output_fpath = os.path.join(output_dir, output_fname)
             cmd = 'ffmpeg -loglevel panic -i {0} -ss {1} -to {2} {3}'.format(
                                                              fpath, s[0], s[1],
                                                              output_fpath)
             subprocess.call(cmd.split(' '))
-           
 
 
 # *****************************************

@@ -1,13 +1,6 @@
 #!/bin/bash
 
-unset CUDA_VISIBLE_DEVICES
-
-python -u -m paddle.distributed.launch --gpus "0,1" run.py \
-       --train_set train.txt \
-       --dev_set dev.txt \
-       --device gpu \
-       --eval_step 100 \
-       --save_dir ./checkpoints \
-       --train_batch_size 32 \
-       --learning_rate 2E-5 \
-       --rdrop_coef 0.0
+python run.py \
+       --init_from_ckpt /home/th/paddle/audio_segment/checkpoint/1/vauc-binary/vauc_model_1000/model_state.pdparams \
+       --step 1 \
+       --learning_rate 1e-4

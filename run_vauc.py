@@ -7,10 +7,8 @@ import logging
 import numpy as np
 import paddle
 import paddle.nn as nn
-from paddle.optimizer.lr import ExponentialDecay
+from paddle.optimizer.lr import ExponentialDecay, LinearWarmup
 # from sklearn.manifold import trustworthiness
-# from paddlenlp.transformers import LinearDecayWithWarmup
-# from sklearn.metrics import precision_recall_fscore_support
 # from paddle.metric import Accuracy
 import paddle.nn.functional as F
 # from sklearn.linear_model import LogisticRegression
@@ -19,15 +17,12 @@ from data import create_dataloader
 from paddlenlp.datasets import load_dataset
 from data_process.features_extract import read_data
 from model import AudioSegmentation
-from auc_loss import AucLoss
-from vauc_loss0 import VaucLoss
+
+from vauc_loss import VaucLoss
 
 logging.basicConfig(format='%(asctime)s:%(levelname)s: %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-'''
-2 类的参数： n_mels=64, hidden_size=256
-'''
 # label2id = {
 #     "no-music": 0,
 #     "music": 1
@@ -43,23 +38,24 @@ id2label = {}
 for k, v in label2id.items():
     id2label[v] = k
 
+
 def getArgs():
     # yapf: disable
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train_set", type=str, default='/home/th/paddle/audio_segment/data/dataset_new/train', required=False, help="The full path of train_set_file")
-    parser.add_argument("--dev_set", type=str, default='/home/th/paddle/audio_segment/data/dataset_new/valid', required=False, help="The full path of dev_set_file")
-    parser.add_argument("--test_set", type=str, default='/home/th/paddle/audio_segment/data/dataset_new/test', required=False, help="The full path of test_set_file")
-    parser.add_argument("--chroma_dir", type=str, default='/home/th/paddle/audio_segment/data/features/chroma_features', required=False, help="The full path of chroma features file")
-    parser.add_argument("--features_dir", type=str, default='/home/th/paddle/audio_segment/data/features/features_3c_combine', required=False, help="The full path of combine features file")
+    parser.add_argument("--train_set", type=str, default='/home/th/paddle/audio_segment/data/dataset_2class/train', required=False, help="The full path of train_set_file")
+    parser.add_argument("--dev_set", type=str, default='/home/th/paddle/audio_segment/data/dataset_2class/valid', required=False, help="The full path of dev_set_file")
+    parser.add_argument("--test_set", type=str, default='/home/th/paddle/audio_segment/data/dataset_2class/test', required=False, help="The full path of test_set_file")
+    # parser.add_argument("--chroma_dir", type=str, default='/home/th/paddle/audio_segment/data/features/chroma_features', required=False, help="The full path of chroma features file")
+    parser.add_argument("--features_dir", type=str, default='/home/th/paddle/audio_segment/data/features/features_2c', required=False, help="The full path of combine features file")
     parser.add_argument("--save_dir", default='/home/th/paddle/audio_segment/checkpoint', type=str, help="The output directory where the model checkpoints will be written.")
     parser.add_argument("--max_seq_length", default=256, type=int, help="The maximum total input sequence length after tokenization. "
         "Sequences longer than this will be truncated, sequences shorter will be padded.")
     parser.add_argument('--max_steps', default=-1, type=int, help="If > 0, set total number of training steps to perform.")
-    parser.add_argument("--train_batch_size", default=64, type=int, help="Batch size per GPU/CPU for training.")
+    parser.add_argument("--train_batch_size", default=48, type=int, help="Batch size per GPU/CPU for training.")
     parser.add_argument("--eval_batch_size", default=128, type=int, help="Batch size per GPU/CPU for training.")
-    parser.add_argument("--learning_rate", default=0.001, type=float, help="The initial learning rate for Adam.")
+    parser.add_argument("--learning_rate", default=1e-4, type=float, help="The initial learning rate for Adam.")
     parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight decay if we apply some.")
-    parser.add_argument("--epochs", default=20, type=int, help="Total number of training epochs to perform.")
+    parser.add_argument("--epochs", default=5, type=int, help="Total number of training epochs to perform.")
     parser.add_argument("--eval_step", default=100, type=int, help="Step interval for evaluation.")
     parser.add_argument("--log_step", default=20, type=int, help="Step interval for logging and printing loss.")
     parser.add_argument('--save_step', default=10000, type=int, help="Step interval for saving checkpoint.")
@@ -71,7 +67,7 @@ def getArgs():
     parser.add_argument("--gpuids", type=str, default="0", required=False, help="set gpu ids which use to perform")
     parser.add_argument("--do_test", type=bool, default=True, required=False, help="evaluate test set or not")
     # rnn parameters set
-    parser.add_argument("--input_size", type=int, default=140, required=False, help="set gpu ids which use to perform")
+    parser.add_argument("--input_size", type=int, default=64, required=False, help="set gpu ids which use to perform")
     parser.add_argument("--hidden_size", type=int, default=256, required=False, help="set gpu ids which use to perform")
     parser.add_argument("--num_layers", type=int, default=2, required=False, help="set gpu ids which use to perform")
     parser.add_argument("--rnn_style", choices=['lstm', 'gru'], default="gru", required=False, help="set gpu ids which use to perform")
@@ -82,10 +78,11 @@ def getArgs():
     parser.add_argument("--fmin", type=int, default=64, required=False, help="Hz")
     parser.add_argument("--fmax", type=int, default=8000, required=False, help="Hz")
     # loss parameters set 
-    parser.add_argument("--loss", choices=['ce', 'auc-binary', 'auc-ovo', "auc-ovr", 'vauc-binary', 'vauc-ovo', "vauc-ovr"], 
-                            default='auc-ovr', required=False, help="select which loss function to train")
+    parser.add_argument("--loss", choices=['vauc-binary', 'vauc-ovo', "vauc-ovr"], 
+                            default='vauc-binary', required=False, help="select which loss function to train")
     parser.add_argument("--delta", type=int, default=10, required=False, help="delta for controling the slope of the sigmoid in auc loss")
-    parser.add_argument("--step", type=int, default=-1, required=False, help="delta for controling the slope of the sigmoid in auc loss")
+
+    parser.add_argument("--step", type=int, default=1, required=False, help="delta for controling the slope of the sigmoid in auc loss")
     args = parser.parse_args()
     return args
 # yapf: enable
@@ -180,20 +177,20 @@ def evaluate(model, criterion, metrics, data_loader):
     start = time.time()
     for batch in data_loader:
         input_features, labels = batch
-        input_features = input_features.astype(paddle.float32)
         total_num += len(labels)
         logits = model(input_features=input_features)
-        logits_re = logits.reshape((-1, len(id2label)))
-        labels_flat = labels.flatten()
-        loss = criterion(logits_re, labels_flat)
-        losses.append(loss.numpy())
+        # logits_re = logits.reshape((-1, len(id2label)))
+        # labels_flat = labels.flatten()
+        # vauc_loss, auc_loss = criterion(logits_re, labels_flat)
+        # loss = 0.2 * vauc_loss + 0.8 * auc_loss
+        # losses.append(loss.numpy())
         metrics.update(labels, logits, is_logits=True)
         
     prec, rec, f1 = metrics.pre_rec_f1()
     accu = metrics.accuracy()
     cost_times = time.time()-start
     logger.info("eval_loss: {:.4}, accuracy: {:.4}, eval_speed: {:.4} ms/item".format(
-        np.mean(losses), accu, (cost_times / total_num) * 1000))
+        0.0, accu, (cost_times / total_num) * 1000))
     for i in range(len(id2label)):
         logger.info("label: {}, precision:{:.4}, recall:{:.4}, f1:{:.4}".format(id2label[i], prec[i], rec[i], f1[i]))
     model.train()
@@ -246,14 +243,9 @@ def train(args):
     optimizer = paddle.optimizer.Adam(
         learning_rate=lr_scheduler,
         parameters=model.parameters())
-    if args.loss == "ce":
-        criterion = nn.loss.CrossEntropyLoss()
-    elif args.loss in ["auc-binary", "auc-ovo", "auc-ovr"]:
-        criterion = AucLoss(mutil_class=args.loss.split("-")[-1], delta=args.delta)
-    elif args.loss in ["vauc-binary", "vauc-ovo", "vauc-ovr"]:
-        criterion = VaucLoss(mutil_class=args.loss.split("-")[-1], delta=args.delta)
-    else:
-        raise ValueError("loss function must be one of ('ce', 'auc-binary', 'auc-ovo', 'auc-ovr', 'vauc-binary', 'vauc-ovo', 'vauc-ovr')")
+    
+    criterion = VaucLoss(mutil_class=args.loss.split("-")[-1], delta=args.delta)
+    
     logger.info(f"****** Training model on {args.loss} loss function ******")
     metrics = metric(num_class=len(id2label))
     
@@ -264,18 +256,18 @@ def train(args):
         for step, batch in enumerate(train_data_loader, start=1):
             
             input_features, labels = batch
-            input_features = input_features.astype(paddle.float32)
             logits = model(input_features=input_features)
             logits_re = logits.reshape((-1, len(id2label)))
             labels_flat = labels.flatten()
             metrics.update(labels, logits, is_logits=True)
             acc = metrics.accuracy() 
-            loss = criterion(logits_re, labels_flat)
+            vauc_loss, auc_loss = criterion(logits_re, labels_flat)
+            loss = vauc_loss
             global_step += 1
             if global_step % args.log_step == 0 and rank == 0:
                 logger.info(
-                    "global step %d, epoch: %d, loss: %.4f, train_acc: %.4f, speed: %.2f step/s"
-                    % (global_step, epoch, loss, acc,
+                    "global step %d, epoch: %d, loss: %.4f, auc_loss: %.4f, vauc_loss: %f, train_acc: %.4f, speed: %.2f step/s"
+                    % (global_step, epoch, loss, auc_loss, vauc_loss * 1000000, acc,
                        args.log_step / (time.time() - tic_train)))
                 tic_train = time.time()
 
@@ -287,12 +279,8 @@ def train(args):
             if global_step % args.eval_step == 0 and rank == 0:     
                 accuracy = evaluate(model, criterion, metrics, dev_data_loader)
                 if epoch > 1 and accuracy > best_accuracy:
-                    if args.step >= 0:
-                        save_dir = os.path.join(args.save_dir + "/" + str(args.step) + "/" + args.loss,
-                                            "model_%d" % global_step)
-                    else:
-                        save_dir = os.path.join(args.save_dir + "/" + args.loss,
-                                            "model_%d" % global_step)
+                    save_dir = os.path.join(args.save_dir + "/" + str(args.step) + "/" + args.loss,
+                                            "vauc_model_%d" % global_step)
                     if not os.path.exists(save_dir):
                         os.makedirs(save_dir)
                     save_param_path = os.path.join(save_dir, 'model_state.pdparams')
@@ -321,29 +309,6 @@ def train(args):
                                         trans_fn=None)
         logger.info(f"The number of examples in test set: {len(test_ds)}")
         evaluate(model, criterion, metrics, test_data_loader)
-
-        # dev_scores = []
-        # dev_labels = []
-        # for batch in dev_data_loader:
-        #     input_features, labels = batch
-        #     logits = model(input_features=input_features)
-        #     dev_scores.append(logits.numpy())
-        #     dev_labels.append(labels.numpy())
-        # dev_scores = np.concatenate(dev_scores, axis=0)
-        # dev_labels = np.concatenate(dev_labels, axis=0)
-        # lgr_model = LogisticRegression()
-        # lgr_model.fit(dev_scores.reshape(-1, dev_scores.shape[-1]), dev_labels.reshape(-1))
-        # correct = 0
-        # test_sum = 0
-        # for batch in test_data_loader:
-        #     input_features, labels = batch
-        #     logits = model(input_features=input_features)
-        #     y_pred = lgr_model.predict(logits.numpy().reshape(-1, logits.shape[-1]))
-        #     labels = labels.numpy().reshape(-1)
-        #     test_sum += labels.shape[0]
-        #     correct += (y_pred == labels).sum()
-        # test_acc = correct / test_sum
-        # logger.info("test acc of logistic regression: {:.4}".format(test_acc) )
 
 
 
